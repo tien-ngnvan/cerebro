@@ -23,7 +23,7 @@ from transformers import (
 )
 from transformers.data.data_collator import _torch_collate_batch
 
-from cerebro import BaseTrainer as Trainer
+from cerebro import DualTrainer as Trainer
 from cerebro.utils.baseloss import CustomCE
 
 logger = logging.getLogger(__name__)
@@ -291,39 +291,39 @@ def main():
                 token=model_args.token,
                 streaming=data_args.streaming,
             )
-        else:
-            data_files = {}
-            if data_args.train_file is not None:
-                data_files["train"] = data_args.train_file
-                extension = data_args.train_file.split(".")[-1]
-            if data_args.validation_file is not None:
-                data_files["validation"] = data_args.validation_file
-                extension = data_args.validation_file.split(".")[-1]
-            if extension == "txt":
-                extension = "text"
-            raw_datasets = load_dataset(
+    else:
+        data_files = {}
+        if data_args.train_file is not None:
+            data_files["train"] = data_args.train_file
+            extension = data_args.train_file.split(".")[-1]
+        if data_args.validation_file is not None:
+            data_files["validation"] = data_args.validation_file
+            extension = data_args.validation_file.split(".")[-1]
+        if extension == "txt":
+            extension = "text"
+        raw_datasets = load_dataset(
+            extension,
+            data_files=data_files,
+            cache_dir=model_args.cache_dir,
+            token=model_args.token,
+        )
+        
+        # If no validation data is there, validation_split_percentage will be used to divide the dataset.
+        if "validation" not in raw_datasets.keys():
+            raw_datasets["validation"] = load_dataset(
                 extension,
                 data_files=data_files,
+                split=f"train[:{data_args.validation_split_percentage}%]",
                 cache_dir=model_args.cache_dir,
                 token=model_args.token,
             )
-            
-            # If no validation data is there, validation_split_percentage will be used to divide the dataset.
-            if "validation" not in raw_datasets.keys():
-                raw_datasets["validation"] = load_dataset(
-                    extension,
-                    data_files=data_files,
-                    split=f"train[:{data_args.validation_split_percentage}%]",
-                    cache_dir=model_args.cache_dir,
-                    token=model_args.token,
-                )
-                raw_datasets["train"] = load_dataset(
-                    extension,
-                    data_files=data_files,
-                    split=f"train[{data_args.validation_split_percentage}%:]",
-                    cache_dir=model_args.cache_dir,
-                    token=model_args.token,
-                )
+            raw_datasets["train"] = load_dataset(
+                extension,
+                data_files=data_files,
+                split=f"train[{data_args.validation_split_percentage}%:]",
+                cache_dir=model_args.cache_dir,
+                token=model_args.token,
+            )
 
     
     ###################################################################################
@@ -548,10 +548,7 @@ def main():
     ###################################################################################
     #                                   custom loss                                   #
     ###################################################################################
-    losses = []
-    losses.append(
-        CustomCE(name='test1', weight=1.0), CustomCE(name='test2', weight=1.0)
-    )
+    losses = [CustomCE(name='test1', weight=1.0), CustomCE(name='test2', weight=1.0)]
     
     
     ###################################################################################
