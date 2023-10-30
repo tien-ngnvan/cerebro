@@ -3,7 +3,8 @@ import torch
 import logging
 from packaging import version
 from collections import defaultdict
-from typing import Optional, Dict
+from typing import Optional, Dict, List
+from torch.utils.data import DataLoader
 
 from transformers import (
     Trainer,
@@ -26,6 +27,7 @@ from transformers.utils import(
 )
 
 from ..utils import EarlyStopping 
+from ..utils import BaseLoss
 
 
 if is_accelerate_available():
@@ -62,10 +64,12 @@ class BaseTrainer(Trainer):
     def __init__(
         self, 
         early_stopping: Optional[EarlyStopping] = None,
+        losses: Optional[List[BaseLoss]] = None,
         *args, **kwargs):
         super().__init__(*args, **kwargs)
         
         self.early_stopping = early_stopping
+        self.losses = losses
         # Inject Customised logging behavior
         self.customized_logging_list = defaultdict(list)
 
@@ -155,50 +159,62 @@ class BaseTrainer(Trainer):
             else:
                 logger.warning("Could not load adapter model, make sure to have `peft>=0.3.0` installed")
                 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, loss_fn = None, return_outputs=False):
         """
         How the loss is computed by Trainer. By default, all models return the loss in the first element.
         
         A neat compute_loss that supports customized logging
 
         """
+        logs = dict()
+        
         if self.label_smoother is not None and "labels" in inputs:
             labels = inputs.pop("labels")
         else:
             labels = None
             
-        outputs = model(**inputs)
+        model_output = model(**inputs)
         
         # Save past state if it exists
         # TODO: this needs to be fixed and made cleaner later.
         if self.args.past_index >= 0:
-            self._past = outputs[self.args.past_index]
+            self._past = model_output[self.args.past_index]
             
         if labels is not None:
+            # get model name
             if is_peft_available() and isinstance(model, PeftModel):
                 model_name = unwrap_model(model.base_model)._get_name()
             else:
                 model_name = unwrap_model(model)._get_name()
-            if model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
-                loss = self.label_smoother(outputs, labels, shift_labels=True)
-            else:
-                loss = self.label_smoother(outputs, labels)
-        else:
-            loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
-            try:
-                logs:dict  = outputs.logs
-            except:
-                logs = None
                 
-            if logs is not None:
-                for key, value in logs.items():
-                    # Set maxlen of list to avoid memory leak, useful when
-                    # customized_logging_list has not been cleaned correctly
-                    if len(self.customized_logging_list) < 5000:
-                        self.customized_logging_list[key].append(value)
+            # calculate loss
+            if model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
+                loss = self.label_smoother(model_output, labels, shift_labels=True)
+            else:
+                # loss = self.label_smoother(outputs, labels)
+                if loss_fn is not None:
+                    logits = model_output["logits"] if isinstance(model_output, dict) else model_output[0]
+                    try:
+                        loss = loss_fn(logits, labels)
+                        logs[loss.name] = loss.item()
+                    except:
+                        logs = None
+                else:
+                    try:
+                        loss = model_output.loss
+                        logs['loss'] = loss.item()
+                    except:
+                        logs = None
+                
+        # Inject Customised logging behavior 
+        if logs is not None:
+            for key, value in logs.items():
+                # Set maxlen of list to avoid memory leak, useful when
+                # customized_logging_list has not been cleaned correctly
+                if len(self.customized_logging_list) < 5000:
+                    self.customized_logging_list[key].append(value)
                         
-        return (loss, outputs) if return_outputs else loss
-        
+        return (loss, model_output) if return_outputs else loss
                 
     def log(self, logs: Dict[str, float]) -> None:
         """
@@ -228,8 +244,25 @@ class BaseTrainer(Trainer):
         self.state.log_history.append(output)
         self.control = self.callback_handler.on_log(self.args, self.state, self.control, logs)
         
-
+    def get_train_dataloader(self) -> DataLoader:
+        """Returns the dataloader for training
         
+        Returns:
+            DataLoader: The training Dataloader
+        """
+        if self.train_dataset is None:
+            raise ValueError("Trainer: training requires a train_dataset.")
+        
+        train_dataloader = DataLoader(
+            self.train_dataset,
+            batch_size=self.args.train_batch_size,
+            sampler=self._get_train_sampler,
+            collate_fn=self.data_collator,
+            drop_last=self.args.dataloader_drop_last,
+            num_workers=self.args.dataloader_num_workers
+        )
+        
+        return self.accelerator.prepare(DataLoader(train_dataloader))
         
         
         
