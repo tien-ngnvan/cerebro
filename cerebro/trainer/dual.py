@@ -53,5 +53,14 @@ class DualTrainer(BaseTrainer):
 
         return loss.detach() / self.args.gradient_accumulation_steps
     
+    def prediction_step(
+        self, model, inputs: Tuple[Dict[str, Union[torch.Tensor, Any]]], *args, **kwargs) -> torch.Tensor:
+        inputs = self._prepare_input(inputs)
+        if len(inputs) > 0:
+            inputs = inputs[0]
+
+        loss = model(**inputs).loss.mean().detach().to(self.args.device) 
+        
+        return (loss, None, None)
     
         
