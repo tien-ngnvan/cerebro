@@ -2,7 +2,7 @@ import os
 import sys
 import math
 import logging
-from typing import Optional
+from typing import Optional, List, Union, Any, Dict, Mapping
 from dataclasses import dataclass, field
 
 import evaluate
@@ -21,9 +21,10 @@ from transformers import (
     is_torch_tpu_available,
     set_seed,
 )
+from transformers.data.data_collator import _torch_collate_batch
 
 from cerebro import BaseTrainer as Trainer
-
+from cerebro.utils.baseloss import CustomCE
 
 logger = logging.getLogger(__name__)
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_MASKED_LM_MAPPING.keys())
@@ -508,19 +509,59 @@ def main():
             labels = labels[mask]
             preds = preds[mask]
             return metric.compute(predictions=preds, references=labels)
-        
+    
+    ###################################################################################
+    #                             custom data collator                                #
+    ###################################################################################
+    
     # Data collator
     # This one will take care of randomly masking the tokens.
+    class MyDataCollator(DataCollatorForLanguageModeling):
+        def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
+            # Handle dict or lists with proper padding and conversion to tensor.
+            if isinstance(examples[0], Mapping):
+                batch = self.tokenizer.pad(examples, return_tensors="pt", pad_to_multiple_of=self.pad_to_multiple_of)
+            else:
+                batch = {
+                    "input_ids": _torch_collate_batch(examples, self.tokenizer, pad_to_multiple_of=self.pad_to_multiple_of)
+                }
+
+            # If special token mask has been preprocessed, pop it from the dict.
+            special_tokens_mask = batch.pop("special_tokens_mask", None)
+            if self.mlm:
+                batch["input_ids"], batch["labels"] = self.torch_mask_tokens(
+                    batch["input_ids"], special_tokens_mask=special_tokens_mask
+                )
+            else:
+                labels = batch["input_ids"].clone()
+                if self.tokenizer.pad_token_id is not None:
+                    labels[labels == self.tokenizer.pad_token_id] = -100
+                batch["labels"] = labels
+            return batch, batch
+        
     pad_to_multiple_of_8 = data_args.line_by_line and training_args.fp16 and not data_args.pad_to_max_length
-    data_collator = DataCollatorForLanguageModeling(
+    data_collator = MyDataCollator(
         tokenizer=tokenizer,
         mlm_probability=data_args.mlm_probability,
         pad_to_multiple_of=8 if pad_to_multiple_of_8 else None,
     )
+    ###################################################################################
+    #                                   custom loss                                   #
+    ###################################################################################
+    losses = []
+    losses.append(
+        CustomCE(name='test1', weight=1.0), CustomCE(name='test2', weight=1.0)
+    )
+    
+    
+    ###################################################################################
+    #                                     trainer                                     #
+    ###################################################################################
     
     # Initialize our Trainer
     trainer = Trainer(
         early_stopping=None,
+        losses=losses,
         model=model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,

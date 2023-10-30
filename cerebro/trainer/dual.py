@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Tuple, Union
 
 import torch
 from torch import nn
@@ -15,13 +15,8 @@ logger = logging.getLogger(__name__)
 
 
 
-class DualTrainer(BaseTrainer):
-    def _inner_training_loop(
-        self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None
-    ):
-        pass
-    
-    def training_step(self, model: nn.Module, inputs: Dict[str, torch.Tensor | Any]) -> torch.Tensor:
+class DualTrainer(BaseTrainer):    
+    def training_step(self, model: nn.Module, inputs: Tuple[Dict[str, Union[torch.Tensor, Any]]]) -> torch.Tensor:
         """
         Perform training step 
 
@@ -34,14 +29,18 @@ class DualTrainer(BaseTrainer):
         """
         
         model.train()
-        inputs = self._prepare_inputs(inputs)
+        inputs = self._prepare_input(inputs) # inputs = (inputs[1], inputs[2])
 
         # Custom loss function 
-        with self.compute_loss_context_manager():            
-            opt_losses = [
-                self.compute_loss(model, inputs[idx], self.losses[idx]) for idx in range(len(self.losses))
-            ]    
-        loss = [l.weight * v for l, v in zip(self.losses, opt_losses)]
+        assert len(inputs) == len(self.losses)
+        with self.compute_loss_context_manager():  
+            if self.losses is not None:          
+                opt_losses = [
+                    self.compute_loss(model, inputs[idx], self.losses[idx]) for idx in range(len(self.losses))
+                ]    
+                loss = sum([l.weight * v for l, v in zip(self.losses, opt_losses)])
+            else:
+                loss = self.compute_loss(model, inputs)
         
         if self.args.n_gpu > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training

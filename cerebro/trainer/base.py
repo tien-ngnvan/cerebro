@@ -3,7 +3,7 @@ import torch
 import logging
 from packaging import version
 from collections import defaultdict
-from typing import Optional, Dict, List
+from typing import Any, Optional, Dict, List, Union
 from torch.utils.data import DataLoader
 
 from transformers import (
@@ -144,21 +144,6 @@ class BaseTrainer(Trainer):
                 del state_dict
                 self._issue_warnings_after_load(load_result)
                 
-        # Load adapters following PR # 24096
-        elif is_peft_available() and isinstance(model, PeftModel):
-            # If train a model using PEFT & LoRA, assume that adapter have been saved properly.
-            if hasattr(model, "active_adapter") and hasattr(model, "load_adapter"):
-                if os.path.exists(resume_from_checkpoint):
-                    model.load_adapter(resume_from_checkpoint, model.active_adapter, is_trainable=True)
-                else:
-                    logger.warning(
-                        "The intermediate checkpoints of PEFT may not be saved correctly, "
-                        f"consider using a custom callback to save {ADAPTER_WEIGHTS_NAME} in corresponding saving folders. "
-                        "Check some examples here: https://github.com/huggingface/peft/issues/96"
-                    )
-            else:
-                logger.warning("Could not load adapter model, make sure to have `peft>=0.3.0` installed")
-                
     def compute_loss(self, model, inputs, loss_fn = None, return_outputs=False):
         """
         How the loss is computed by Trainer. By default, all models return the loss in the first element.
@@ -168,7 +153,7 @@ class BaseTrainer(Trainer):
         """
         logs = dict()
         
-        if self.label_smoother is not None and "labels" in inputs:
+        if "labels" in inputs: # self.label_smoother is not None and 
             labels = inputs.pop("labels")
         else:
             labels = None
@@ -202,7 +187,7 @@ class BaseTrainer(Trainer):
                 else:
                     try:
                         loss = model_output.loss
-                        logs['loss'] = loss.item()
+                        logs['default-loss'] = loss.item()
                     except:
                         logs = None
                 
@@ -263,8 +248,16 @@ class BaseTrainer(Trainer):
         )
         
         return self.accelerator.prepare(DataLoader(train_dataloader))
+    
+    def _prepare_inputs(self, inputs: Dict[str, Union[torch.Tensor, Any]]) -> List[Dict[str, Union[torch.Tensor, Any]]]:
+        prepared = []
+        for x in inputs:
+            if isinstance(x, torch.Tensor):
+                prepared.append(x.to(self.args.device))
+            else:
+                prepared.append(super()._prepare_input(x))
         
-        
+        return prepared
         
         
         
