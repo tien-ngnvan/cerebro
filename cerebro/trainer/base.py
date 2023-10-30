@@ -21,9 +21,11 @@ from transformers.utils import(
     ADAPTER_WEIGHTS_NAME,
     ADAPTER_SAFE_WEIGHTS_NAME,
     is_accelerate_available,
-    is_deepspeed_available,
     is_safetensors_available,
     is_peft_available
+)
+from transformers.integrations import (
+    is_deepspeed_available,
 )
 
 from ..utils import EarlyStopping 
@@ -181,7 +183,7 @@ class BaseTrainer(Trainer):
                     logits = model_output["logits"] if isinstance(model_output, dict) else model_output[0]
                     try:
                         loss = loss_fn(logits, labels)
-                        logs[loss.name] = loss.item()
+                        logs[loss_fn.name] = loss.item()
                     except:
                         logs = None
                 else:
@@ -190,7 +192,7 @@ class BaseTrainer(Trainer):
                         logs['default-loss'] = loss.item()
                     except:
                         logs = None
-                
+        
         # Inject Customised logging behavior 
         if logs is not None:
             for key, value in logs.items():
@@ -229,6 +231,7 @@ class BaseTrainer(Trainer):
         self.state.log_history.append(output)
         self.control = self.callback_handler.on_log(self.args, self.state, self.control, logs)
         
+        
     def get_train_dataloader(self) -> DataLoader:
         """Returns the dataloader for training
         
@@ -241,13 +244,13 @@ class BaseTrainer(Trainer):
         train_dataloader = DataLoader(
             self.train_dataset,
             batch_size=self.args.train_batch_size,
-            sampler=self._get_train_sampler,
+            sampler=self._get_train_sampler(),
             collate_fn=self.data_collator,
             drop_last=self.args.dataloader_drop_last,
             num_workers=self.args.dataloader_num_workers
         )
         
-        return self.accelerator.prepare(DataLoader(train_dataloader))
+        return self.accelerator.prepare(train_dataloader)
     
     def _prepare_inputs(self, inputs: Dict[str, Union[torch.Tensor, Any]]) -> List[Dict[str, Union[torch.Tensor, Any]]]:
         prepared = []
@@ -258,6 +261,3 @@ class BaseTrainer(Trainer):
                 prepared.append(super()._prepare_input(x))
         
         return prepared
-        
-        
-        
