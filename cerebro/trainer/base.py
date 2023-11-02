@@ -160,12 +160,12 @@ class BaseTrainer(Trainer):
         else:
             labels = None
             
-        model_output = model(**inputs)
+        outputs = model(**inputs)
         
         # Save past state if it exists
         # TODO: this needs to be fixed and made cleaner later.
         if self.args.past_index >= 0:
-            self._past = model_output[self.args.past_index]
+            self._past = outputs[self.args.past_index]
             
         if labels is not None:
             # get model name
@@ -176,11 +176,10 @@ class BaseTrainer(Trainer):
                 
             # calculate loss
             if model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
-                loss = self.label_smoother(model_output, labels, shift_labels=True)
+                loss = self.label_smoother(outputs, labels, shift_labels=True)
             else:
-                # loss = self.label_smoother(outputs, labels)
                 if loss_fn is not None:
-                    logits = model_output["logits"] if isinstance(model_output, dict) else model_output[0]
+                    logits = outputs["logits"] if isinstance(outputs, dict) else outputs[0]
                     try:
                         loss = loss_fn(logits, labels)
                         logs[loss_fn.name] = loss.item()
@@ -188,7 +187,7 @@ class BaseTrainer(Trainer):
                         logs = None
                 else:
                     try:
-                        loss = model_output.loss
+                        loss = self.label_smoother(outputs, labels)
                         logs['default-loss'] = loss.item()
                     except:
                         logs = None
@@ -201,7 +200,7 @@ class BaseTrainer(Trainer):
                 if len(self.customized_logging_list) < 5000:
                     self.customized_logging_list[key].append(value)
                         
-        return (loss, model_output) if return_outputs else loss
+        return (loss, outputs) if return_outputs else loss
                 
     def log(self, logs: Dict[str, float]) -> None:
         """
@@ -261,3 +260,5 @@ class BaseTrainer(Trainer):
                 prepared.append(super()._prepare_input(x))
         
         return prepared
+    
+    
