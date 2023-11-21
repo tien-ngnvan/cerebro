@@ -454,13 +454,17 @@ def main():
         # Otherwise, we tokenize every text, then concatenate them together before splitting them in smaller parts.
         # We use `return_special_tokens_mask=True` because DataCollatorForLanguageModeling (see below) is more
         # efficient when it receives the `special_tokens_mask`.
-        def tokenize_function(examples):
-            return tokenizer(examples[text_column_name], return_special_tokens_mask=True)
+        def tokenize_function(examples, data_args):
+            return tokenizer(examples[text_column_name],
+                            padding=True,
+                            truncation=True,
+                            max_length=data_args.max_seq_length,
+                            return_special_tokens_mask=True)
 
         with training_args.main_process_first(desc="dataset map tokenization"):
             if not data_args.streaming:
                 tokenized_datasets = raw_datasets.map(
-                    tokenize_function,
+                    lambda example: tokenize_function(example, data_args),
                     batched=True,
                     num_proc=data_args.preprocessing_num_workers,
                     remove_columns=column_names,
@@ -469,7 +473,7 @@ def main():
                 )
             else:
                 tokenized_datasets = raw_datasets.map(
-                    tokenize_function,
+                    lambda example: tokenize_function(example, data_args),
                     batched=True,
                     remove_columns=column_names,
                 )
